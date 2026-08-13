@@ -7,10 +7,10 @@ from botocore.client import Config
 from botocore.exceptions import ClientError
 from s3os import S3OS, list_all_buckets, list_objects_in_bucket, download_file, check_bucket_permissions
 # 您的凭证与端点信息
-ACCESS_KEY = '019FE23D0767764488DD0D9DD2F91D1F'
-SECRET_KEY = '019FE23D07677632A2EF174667B94044'
+ACCESS_KEY = 'YOUR_ACCESS_KEY'
+SECRET_KEY = 'YOUR_SECRET_KEY'
 # 注意：endpoint_url 只需要填 host_base 即可
-ENDPOINT_URL = "http://aoss.cn-sh-01b.sensecoreapi-oss.cn"
+ENDPOINT_URL = "YOUR_ENDPOINT_URL"
 
 # 1. 初始化 S3 Client
 s3_client = boto3.client(
@@ -28,7 +28,7 @@ s3_client = boto3.client(
 if __name__ == '__main__':
     # 测试连接并列出桶
     list_all_buckets(s3_client)
-    bucket = "ace_data0"
+    bucket = "YOUR_BUCKET_NAME"
     s3os = S3OS(bucket,s3_client)
 
     # 只读权限检查
@@ -36,9 +36,9 @@ if __name__ == '__main__':
     # 完整读写检查，会创建并删除临时对象
     print(check_bucket_permissions(s3_client,bucket, test_write=True))
 
-    for sub_dir in s3os.listdir("data_sg"):
+    for sub_dir in s3os.listdir("data_sg"):               #list path
         print(f"Subdirectory: {sub_dir}")
-        sub_dir_path = s3os.join("data_sg", sub_dir)
+        sub_dir_path = s3os.join("data_sg", sub_dir)      #join path
         zed_dir = s3os.join(sub_dir_path, "zed")
         homie_dir = s3os.join(sub_dir_path, "homie")
         if s3os.isdir(zed_dir):
@@ -55,12 +55,6 @@ if __name__ == '__main__':
             if s3os.isdir(unsync_frames_path):
                 print(f"  Found 'frames' directory in {zed_dir}, removing it.")
                 s3os.rmtree(unsync_frames_path)
-        if s3os.isdir(homie_dir):
-            print(f"  Found 'homie' directory in {sub_dir_path}")
-            cam_frames = s3os.join(homie_dir, "cam_frames")
-            if s3os.isdir(cam_frames):
-                print(f"  Found 'cam_frames' directory in {homie_dir}, removing it.")
-                s3os.rmtree(cam_frames)
             frames = s3os.join(homie_dir, "frames")
             if s3os.isdir(frames):
                 print(f"  Found 'cam_frames' directory in {homie_dir}, removing it.")
