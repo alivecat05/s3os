@@ -1,0 +1,75 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "s3os"
+dynamic = ["version"]
+description = "Small os-style helpers for working with S3 buckets."
+readme = "README.md"
+requires-python = ">=3.9"
+license = "Apache-2.0"
+authors = [
+  { name = "Dawei Su" }
+]
+keywords = ["s3", "boto3", "object-storage", "filesystem", "aws"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Internet",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+  "Topic :: System :: Filesystems",
+  "Typing :: Typed",
+]
+dependencies = [
+  "boto3>=1.28",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "ruff>=0.6",
+]
+
+[project.urls]
+Changelog = "https://github.com/alivecat05/s3os/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/alivecat05/s3os"
+Repository = "https://github.com/alivecat05/s3os"
+Issues = "https://github.com/alivecat05/s3os/issues"
+
+[tool.hatch.version]
+path = "src/s3os/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/s3os"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/src",
+  "/tests",
+  "/examples",
+  "/CHANGELOG.md",
+  "/CONTRIBUTING.md",
+  "/README.md",
+  "/SECURITY.md",
+  "/LICENSE",
+  "/pyproject.toml",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

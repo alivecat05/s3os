@@ -1,0 +1,43 @@
+name: Bug report
+description: Report reproducible incorrect behavior in s3os
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for helping improve s3os. Remove credentials and sensitive object names.
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened, and what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Provide the smallest code sample that reproduces the problem.
+      render: python
+    validations:
+      required: true
+  - type: input
+    id: provider
+    attributes:
+      label: S3 provider
+      placeholder: AWS S3, MinIO, Cloudflare R2, Ceph, or another provider
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Include the s3os, Python, and boto3 versions.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Remove credentials, signed URLs, tokens, and sensitive object names.
+      render: shell
