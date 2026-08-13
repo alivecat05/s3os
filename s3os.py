@@ -1,4 +1,6 @@
 import boto3
+import base64
+import hashlib
 import io
 import posixpath
 import uuid
@@ -112,6 +114,33 @@ class S3OS:
         self.client = client
 
     @staticmethod
+    def _add_delete_objects_content_md5(request, **kwargs):
+        """为 S3 兼容存储的 DeleteObjects 请求补充 Content-MD5。"""
+        if 'Content-MD5' in request.headers or request.body is None:
+            return
+
+        body = request.body
+        if isinstance(body, str):
+            body = body.encode('utf-8')
+        elif isinstance(body, bytearray):
+            body = bytes(body)
+        elif not isinstance(body, bytes):
+            position = body.tell()
+            body = body.read()
+            body.seek(position)
+
+        digest = hashlib.md5(body, usedforsecurity=False).digest()
+        request.headers['Content-MD5'] = base64.b64encode(digest).decode('ascii')
+
+    def _enable_delete_objects_content_md5(self):
+        # unique_id 保证同一 client 被多个 S3OS 复用时不会重复注册。
+        self.client.meta.events.register_first(
+            'before-sign.s3.DeleteObjects',
+            self._add_delete_objects_content_md5,
+            unique_id='s3os-delete-objects-content-md5',
+        )
+
+    @staticmethod
     def _key(path):
         if path is None:
             raise TypeError('path 不能是 None')
@@ -223,6 +252,8 @@ class S3OS:
         key = self._key(path)
         if not key:
             raise ValueError('不能递归删除 Bucket 根目录')
+
+        self._enable_delete_objects_content_md5()
 
         # S3 没有真实目录；只删除 "path/" 前缀，
         # 避免把 frames_backup 这类同名开头的 Key 一起删除。
