@@ -22,10 +22,6 @@ but you still want to keep direct control of the boto3 client and credentials.
 - Adds `Content-MD5` to `DeleteObjects` requests for S3-compatible providers
   that require it.
 
-Use `s3os` when you want a small convenience layer and already work with a
-boto3-compatible client. For a complete filesystem implementation, dataframe
-integration, caching, or async IO, consider projects such as `s3fs` or `fsspec`
-instead. `s3os` deliberately stays close to S3 semantics.
 
 ## Installation
 
