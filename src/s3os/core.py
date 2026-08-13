@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import base64
+import fnmatch
 import hashlib
 import io
 import posixpath
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
+from functools import cache
 from typing import Any, BinaryIO, Literal, TextIO, Union, overload
 
 from botocore.exceptions import ClientError
@@ -14,6 +16,31 @@ from botocore.exceptions import ClientError
 PermissionValue = Union[bool, str, None]
 PermissionReport = dict[str, PermissionValue]
 OpenMode = Literal["r", "rb", "w", "wb"]
+
+
+def _glob_match(key: str, pattern: str) -> bool:
+    """Match an S3 key using path-aware glob semantics."""
+    key_parts = tuple(key.split("/"))
+    pattern_parts = tuple(pattern.split("/"))
+
+    @cache
+    def match(key_index: int, pattern_index: int) -> bool:
+        if pattern_index == len(pattern_parts):
+            return key_index == len(key_parts)
+
+        part = pattern_parts[pattern_index]
+        if part == "**":
+            return match(key_index, pattern_index + 1) or (
+                key_index < len(key_parts) and match(key_index + 1, pattern_index)
+            )
+
+        return (
+            key_index < len(key_parts)
+            and fnmatch.fnmatchcase(key_parts[key_index], part)
+            and match(key_index + 1, pattern_index + 1)
+        )
+
+    return match(0, 0)
 
 
 def _client_error_message(exc: ClientError) -> str:
@@ -211,6 +238,87 @@ class S3OS:
                     names.add(relative)
         return sorted(names)
 
+    def walk(
+        self,
+        top: object = "",
+        topdown: bool = True,
+    ) -> Iterator[tuple[str, list[str], list[str]]]:
+        """Yield directory paths, child directories, and files below ``top``.
+
+        The result follows ``os.walk`` conventions. When ``topdown`` is true,
+        callers may modify the yielded directory list in place to prune the
+        traversal.
+        """
+        top_key = self._key(top)
+
+        def visit(root: str) -> Iterator[tuple[str, list[str], list[str]]]:
+            prefix = f"{root}/" if root else ""
+            directories: set[str] = set()
+            files: set[str] = set()
+            exists = not root
+            paginator = self.client.get_paginator("list_objects_v2")
+
+            for page in paginator.paginate(
+                Bucket=self.bucket_name,
+                Prefix=prefix,
+                Delimiter="/",
+            ):
+                contents = page.get("Contents", [])
+                common_prefixes = page.get("CommonPrefixes", [])
+                exists = exists or bool(contents) or bool(common_prefixes)
+
+                for item in contents:
+                    relative = item["Key"][len(prefix) :]
+                    if relative:
+                        files.add(relative)
+                for item in common_prefixes:
+                    relative = item["Prefix"][len(prefix) :].rstrip("/")
+                    if relative:
+                        directories.add(relative)
+
+            if not exists:
+                return
+
+            directory_names = sorted(directories)
+            file_names = sorted(files)
+            if topdown:
+                yield root, directory_names, file_names
+            for directory in directory_names:
+                yield from visit(self.join(root, directory))
+            if not topdown:
+                yield root, directory_names, file_names
+
+        yield from visit(top_key)
+
+    def glob(self, pattern: object) -> list[str]:
+        """Return sorted object keys matching a path-aware glob pattern.
+
+        ``*``, ``?``, and character ranges match within one path component.
+        ``**`` matches zero or more complete path components.
+        """
+        normalized_pattern = self._key(pattern)
+        if not normalized_pattern:
+            return []
+
+        prefix_parts: list[str] = []
+        for part in normalized_pattern.split("/"):
+            if any(character in part for character in "*?["):
+                break
+            prefix_parts.append(part)
+
+        prefix = "/".join(prefix_parts)
+        if prefix_parts and len(prefix_parts) < len(normalized_pattern.split("/")):
+            prefix += "/"
+
+        matches: set[str] = set()
+        paginator = self.client.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=self.bucket_name, Prefix=prefix):
+            for item in page.get("Contents", []):
+                key = item["Key"]
+                if not key.endswith("/") and _glob_match(key, normalized_pattern):
+                    matches.add(key)
+        return sorted(matches)
+
     @overload
     def open(
         self,
@@ -296,6 +404,28 @@ class S3OS:
         self.client.delete_object(Bucket=self.bucket_name, Key=key)
 
     unlink = remove
+
+    def copy(self, source: object, destination: object) -> None:
+        """Copy one object within the bucket using boto3's managed transfer."""
+        source_key = self._key(source)
+        destination_key = self._key(destination)
+        if not source_key or not destination_key:
+            raise ValueError("source and destination must be object keys")
+        if source_key == destination_key:
+            raise ValueError("source and destination must be different")
+
+        self.client.copy(
+            {"Bucket": self.bucket_name, "Key": source_key},
+            self.bucket_name,
+            destination_key,
+        )
+
+    def move(self, source: object, destination: object) -> None:
+        """Move one object by copying it, then deleting the source."""
+        source_key = self._key(source)
+        destination_key = self._key(destination)
+        self.copy(source_key, destination_key)
+        self.remove(source_key)
 
     def rmtree(self, path: object) -> int:
         """Recursively delete all objects under ``path/`` and return the count."""

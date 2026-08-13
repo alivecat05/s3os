@@ -40,6 +40,8 @@ class FakeClient:
         self.deleted = []
         self.downloads = []
         self.uploads = []
+        self.copies = []
+        self.copy_error = None
         self.paginator = FakePaginator([])
         self.list_pages = []
 
@@ -83,6 +85,13 @@ class FakeClient:
             self.objects.pop(item["Key"], None)
         return {}
 
+    def copy(self, CopySource, Bucket, Key):
+        if self.copy_error is not None:
+            raise self.copy_error
+        source_key = CopySource["Key"]
+        self.copies.append((CopySource, Bucket, Key))
+        self.objects[Key] = self.objects[source_key]
+
     def download_file(self, bucket_name, object_name, local_file_path):
         self.downloads.append((bucket_name, object_name, local_file_path))
 
@@ -117,6 +126,88 @@ def test_listdir_returns_direct_children_only():
     assert s3.listdir("data") == ["file.txt", "images", "logs", "readme.md"]
     assert client.paginator.calls[0]["Delimiter"] == "/"
     assert client.paginator.calls[0]["Prefix"] == "data/"
+
+
+def test_walk_yields_sorted_tree_and_supports_pruning():
+    class WalkPaginator:
+        def __init__(self):
+            self.calls = []
+
+        def paginate(self, **kwargs):
+            self.calls.append(kwargs)
+            prefix = kwargs["Prefix"]
+            pages = {
+                "data/": [
+                    {
+                        "Contents": [{"Key": "data/readme.md"}],
+                        "CommonPrefixes": [
+                            {"Prefix": "data/images/"},
+                            {"Prefix": "data/private/"},
+                        ],
+                    }
+                ],
+                "data/images/": [{"Contents": [{"Key": "data/images/a.png"}]}],
+                "data/private/": [{"Contents": [{"Key": "data/private/key.txt"}]}],
+            }
+            yield from pages.get(prefix, [])
+
+    client = FakeClient()
+    client.paginator = WalkPaginator()
+    s3 = S3OS("bucket", client)
+    walker = s3.walk("data")
+
+    root, directories, files = next(walker)
+    directories.remove("private")
+
+    assert (root, directories, files) == ("data", ["images"], ["readme.md"])
+    assert list(walker) == [("data/images", [], ["a.png"])]
+
+
+def test_walk_returns_nothing_for_a_missing_prefix():
+    s3 = S3OS("bucket", FakeClient())
+
+    assert list(s3.walk("missing")) == []
+
+
+def test_walk_can_yield_children_before_their_parent():
+    class WalkPaginator:
+        def paginate(self, **kwargs):
+            if kwargs["Prefix"] == "logs/":
+                yield {"CommonPrefixes": [{"Prefix": "logs/2026/"}]}
+            elif kwargs["Prefix"] == "logs/2026/":
+                yield {"Contents": [{"Key": "logs/2026/app.log"}]}
+
+    client = FakeClient()
+    client.paginator = WalkPaginator()
+    s3 = S3OS("bucket", client)
+
+    assert list(s3.walk("logs", topdown=False)) == [
+        ("logs/2026", [], ["app.log"]),
+        ("logs", ["2026"], []),
+    ]
+
+
+def test_glob_matches_path_components_and_recursive_patterns():
+    client = FakeClient()
+    client.paginator = FakePaginator(
+        [
+            {
+                "Contents": [
+                    {"Key": "datasets/train.jsonl"},
+                    {"Key": "datasets/2026/part-01.jsonl"},
+                    {"Key": "datasets/2026/part-02.csv"},
+                    {"Key": "datasets/archive/"},
+                ]
+            }
+        ]
+    )
+    s3 = S3OS("bucket", client)
+
+    assert s3.glob("datasets/**/*.jsonl") == [
+        "datasets/2026/part-01.jsonl",
+        "datasets/train.jsonl",
+    ]
+    assert client.paginator.calls == [{"Bucket": "bucket", "Prefix": "datasets/"}]
 
 
 def test_open_reads_and_writes_text_objects():
@@ -180,6 +271,44 @@ def test_rmtree_rejects_bucket_root():
 
     with pytest.raises(ValueError, match="bucket root"):
         s3.rmtree("/")
+
+
+def test_copy_and_move_objects_within_the_bucket():
+    client = FakeClient()
+    client.objects["models/current.bin"] = b"model"
+    s3 = S3OS("bucket", client)
+
+    s3.copy("models/current.bin", "models/archive/v1.bin")
+    s3.move("models/current.bin", "models/current-v2.bin")
+
+    assert client.objects["models/archive/v1.bin"] == b"model"
+    assert client.objects["models/current-v2.bin"] == b"model"
+    assert "models/current.bin" not in client.objects
+    assert client.deleted == ["models/current.bin"]
+
+
+def test_move_keeps_source_when_copy_fails():
+    client = FakeClient()
+    client.objects["source.txt"] = b"safe"
+    client.copy_error = ClientError(
+        {"Error": {"Code": "AccessDenied", "Message": "Denied"}},
+        "CopyObject",
+    )
+    s3 = S3OS("bucket", client)
+
+    with pytest.raises(ClientError):
+        s3.move("source.txt", "destination.txt")
+
+    assert client.objects["source.txt"] == b"safe"
+    assert client.deleted == []
+
+
+@pytest.mark.parametrize("method_name", ["copy", "move"])
+def test_copy_and_move_reject_the_same_key(method_name):
+    s3 = S3OS("bucket", FakeClient())
+
+    with pytest.raises(ValueError, match="must be different"):
+        getattr(s3, method_name)("same.txt", "same.txt")
 
 
 def test_delete_objects_content_md5_header():

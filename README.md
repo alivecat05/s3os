@@ -7,7 +7,8 @@
 Small os-style helpers for working with S3 buckets.
 
 `s3os` wraps a boto3 S3 client with familiar file operations such as `listdir`,
-`isfile`, `isdir`, `open`, `remove`, `rmtree`, `upload`, and `download`. It is
+`isfile`, `isdir`, `walk`, `glob`, `open`, `copy`, `move`, `remove`, `rmtree`,
+`upload`, and `download`. It is
 useful when your code treats an S3 bucket like a lightweight project filesystem
 but you still want to keep direct control of the boto3 client and credentials.
 
@@ -97,6 +98,20 @@ s3.listdir("folder")
 
 S3 keys always use `/`, even on Windows.
 
+### Walk and Glob
+
+```python
+for root, directories, files in s3.walk("datasets"):
+    print(root, directories, files)
+
+jsonl_files = s3.glob("datasets/**/*.jsonl")
+checkpoints = s3.glob("models/checkpoint-??.bin")
+```
+
+`walk()` follows `os.walk()` conventions, including top-down pruning by
+modifying the yielded directory list. In `glob()`, `*`, `?`, and character
+ranges match within one path component, while `**` matches recursively.
+
 ### File IO
 
 ```python
@@ -123,6 +138,18 @@ deleted_count = s3.rmtree("folder")
 
 `remove()` deletes exactly one object. `rmtree()` deletes objects below the
 `folder/` prefix and refuses to delete the bucket root.
+
+### Copy and Move
+
+```python
+s3.copy("models/latest.bin", "models/archive/v1.bin")
+s3.move("logs/current.jsonl", "logs/processed/current.jsonl")
+```
+
+Both methods operate on one object within the bound bucket and overwrite an
+existing destination, matching S3 behavior. `copy()` uses boto3's managed
+transfer, including multipart copy for large objects. `move()` deletes the
+source only after the copy succeeds; it is not an atomic S3 operation.
 
 ### Permission Check
 
