@@ -142,6 +142,8 @@ s3.copy("models/latest.bin", "models/archive/v1.bin")
 s3.move("logs/current.jsonl", "logs/processed/current.jsonl")
 s3.rename("models/draft.bin", "models/final.bin")
 s3.rename("datasets/raw", "datasets/processed")
+s3.rename("large/model.bin", "archive/model.bin", mode="native")
+s3.rename("large-dataset", "archive/dataset", mode="native", max_workers=32)
 ```
 
 `copy()` and `move()` operate on one object within the bound bucket. `rename()`
@@ -159,6 +161,25 @@ every object in that batch has copied successfully. S3 has no atomic rename: if
 a later batch fails, earlier batches remain at the destination and unprocessed
 objects remain at the source. Calling `rename()` again resumes naturally from
 the remaining source objects.
+
+`rename()` supports three strategies:
+
+- `mode="auto"` (default): use native `RenameObject` for AWS S3 Express
+  directory buckets and copy-then-delete for other providers. If boto3 is too
+  old to expose `RenameObject`, it raises instead of silently copying data.
+- `mode="native"`: require native rename and raise `NotImplementedError`
+  instead of copying a large object when native rename is unavailable.
+- `mode="copy"`: explicitly use the portable copy-then-delete implementation.
+
+Native rename is currently an AWS S3 Express One Zone feature. For a 48 GB
+object in an S3 Express directory bucket, it changes the key without copying
+48 GB. Regular AWS S3 buckets, MinIO, Cloudflare R2, and most S3-compatible
+providers do not expose a standard native rename operation.
+
+For a directory prefix in S3 Express, `rename()` lists keys in bounded pages and
+runs native metadata renames concurrently. `max_workers` defaults to 16 and can
+be tuned for the account's request-rate limits. Object sizes do not affect the
+amount of data moved because native rename does not copy object payloads.
 
 ### Permission Check
 

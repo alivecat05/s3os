@@ -11,6 +11,10 @@ Notable changes to this project are documented here. The format follows
 - Add `walk()` and path-aware `glob()` for recursive object discovery.
 - Add managed single-object `copy()` and copy-then-delete `move()` operations.
 - Add `rename()` for copy-then-delete object and directory-prefix renames.
+- Use native `RenameObject` for AWS S3 Express directory buckets and expose
+  explicit `auto`, `native`, and `copy` rename strategies.
+- Run S3 Express directory-prefix renames concurrently with a configurable
+  `max_workers` limit.
 
 ## [0.1.0] - 2026-08-13
 

@@ -42,6 +42,8 @@ class FakeClient:
         self.uploads = []
         self.copies = []
         self.copy_error = None
+        self.native_renames = []
+        self.native_rename_error = None
         self.delete_batches = []
         self.list_calls = []
         self.paginator = FakePaginator([])
@@ -98,6 +100,18 @@ class FakeClient:
         source_key = CopySource["Key"]
         self.copies.append((CopySource, Bucket, Key))
         self.objects[Key] = self.objects[source_key]
+
+    def rename_object(self, Bucket, Key, RenameSource):
+        if self.native_rename_error is not None:
+            raise self.native_rename_error
+        source_key = RenameSource.replace("%20", " ")
+        if source_key not in self.objects:
+            raise ClientError(
+                {"Error": {"Code": "NoSuchKey", "Message": "Not found"}},
+                "RenameObject",
+            )
+        self.native_renames.append((Bucket, Key, RenameSource))
+        self.objects[Key] = self.objects.pop(source_key)
 
     def download_file(self, bucket_name, object_name, local_file_path):
         self.downloads.append((bucket_name, object_name, local_file_path))
@@ -320,6 +334,106 @@ def test_rename_moves_an_object_to_a_new_key():
     assert client.objects["logs/archive/2026-08-14.log"] == b"log"
     assert "logs/current.log" not in client.objects
     assert client.deleted == ["logs/current.log"]
+
+
+def test_s3_express_rename_uses_native_operation_without_copying():
+    client = FakeClient()
+    client.objects["large files/model 48g.bin"] = b"metadata-only-test"
+    s3 = S3OS("models--usw2-az1--x-s3", client)
+
+    s3.rename("large files/model 48g.bin", "archive/model 48g.bin")
+
+    assert client.native_renames == [
+        (
+            "models--usw2-az1--x-s3",
+            "archive/model 48g.bin",
+            "large%20files/model%2048g.bin",
+        )
+    ]
+    assert client.copies == []
+    assert client.deleted == []
+    assert client.objects["archive/model 48g.bin"] == b"metadata-only-test"
+
+
+def test_native_mode_refuses_to_copy_on_a_regular_bucket():
+    client = FakeClient()
+    client.objects["large.bin"] = b"large"
+    s3 = S3OS("regular-bucket", client)
+
+    with pytest.raises(NotImplementedError, match="S3 Express"):
+        s3.rename("large.bin", "renamed.bin", mode="native")
+
+    assert client.copies == []
+    assert client.objects["large.bin"] == b"large"
+
+
+def test_auto_mode_does_not_copy_when_s3_express_client_is_too_old():
+    client = FakeClient()
+    client.rename_object = None
+    client.objects["large.bin"] = b"large"
+    s3 = S3OS("models--usw2-az1--x-s3", client)
+
+    with pytest.raises(NotImplementedError, match="recent boto3"):
+        s3.rename("large.bin", "renamed.bin")
+
+    assert client.copies == []
+    assert client.objects["large.bin"] == b"large"
+
+
+def test_copy_mode_can_be_requested_explicitly_for_s3_express():
+    client = FakeClient()
+    client.objects["source.txt"] = b"value"
+    s3 = S3OS("models--usw2-az1--x-s3", client)
+
+    s3.rename("source.txt", "destination.txt", mode="copy")
+
+    assert client.native_renames == []
+    assert client.copies
+    assert client.deleted == ["source.txt"]
+
+
+def test_s3_express_directory_rename_uses_native_operation_per_object():
+    client = FakeClient()
+    client.objects = {
+        "source/a.txt": b"a",
+        "source/nested/b.txt": b"b",
+    }
+    s3 = S3OS("data--usw2-az1--x-s3", client)
+
+    s3.rename("source", "destination")
+
+    assert len(client.native_renames) == 2
+    assert client.copies == []
+    assert client.delete_batches == []
+    assert client.objects == {
+        "destination/a.txt": b"a",
+        "destination/nested/b.txt": b"b",
+    }
+
+
+def test_s3_express_directory_rename_accepts_a_worker_limit():
+    client = FakeClient()
+    client.objects = {f"source/{index}.txt": b"value" for index in range(20)}
+    s3 = S3OS("data--usw2-az1--x-s3", client)
+
+    s3.rename("source", "destination", max_workers=4)
+
+    assert len(client.native_renames) == 20
+    assert all(key.startswith("destination/") for key in client.objects)
+
+
+def test_rename_rejects_an_unknown_mode():
+    s3 = S3OS("bucket", FakeClient())
+
+    with pytest.raises(ValueError, match="mode must be"):
+        s3.rename("source", "destination", mode="fast")
+
+
+def test_rename_rejects_an_invalid_worker_limit():
+    s3 = S3OS("bucket", FakeClient())
+
+    with pytest.raises(ValueError, match="max_workers"):
+        s3.rename("source", "destination", max_workers=0)
 
 
 def test_rename_moves_a_directory_prefix_after_copying_all_objects():

@@ -7,15 +7,18 @@ import io
 import posixpath
 import uuid
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from functools import cache
 from typing import Any, BinaryIO, Literal, TextIO, Union, overload
+from urllib.parse import quote
 
 from botocore.exceptions import ClientError
 
 PermissionValue = Union[bool, str, None]
 PermissionReport = dict[str, PermissionValue]
 OpenMode = Literal["r", "rb", "w", "wb"]
+RenameMode = Literal["auto", "native", "copy"]
 
 
 def _glob_match(key: str, pattern: str) -> bool:
@@ -427,22 +430,61 @@ class S3OS:
         self.copy(source_key, destination_key)
         self.remove(source_key)
 
-    def rename(self, source: object, destination: object) -> None:
-        """Rename one object or directory prefix using copy-then-delete.
+    def _supports_native_rename(self) -> bool:
+        return callable(getattr(self.client, "rename_object", None))
 
-        Directory prefixes are processed in batches of up to 1,000 objects.
-        S3 has no atomic rename operation, so completed batches stay moved if a
-        later batch fails. Calling ``rename`` again continues with the objects
-        that remain under the source prefix.
+    def _native_rename(self, source_key: str, destination_key: str) -> None:
+        self.client.rename_object(
+            Bucket=self.bucket_name,
+            Key=destination_key,
+            RenameSource=quote(source_key, safe="/"),
+        )
+
+    def _native_rename_pair(self, pair: tuple[str, str]) -> None:
+        self._native_rename(*pair)
+
+    def rename(
+        self,
+        source: object,
+        destination: object,
+        mode: RenameMode = "auto",
+        max_workers: int = 16,
+    ) -> None:
+        """Rename one object or directory prefix.
+
+        ``auto`` uses native ``RenameObject`` for S3 Express directory buckets
+        and copy-then-delete elsewhere. ``native`` refuses to copy data when
+        the provider does not support native rename. ``copy`` always uses the
+        portable copy-then-delete implementation.
         """
         source_key = self._key(source)
         destination_key = self._key(destination)
+        if mode not in {"auto", "native", "copy"}:
+            raise ValueError("mode must be 'auto', 'native', or 'copy'")
+        if max_workers < 1:
+            raise ValueError("max_workers must be at least 1")
         if not source_key or not destination_key:
             raise ValueError("source and destination must be object keys or prefixes")
         if source_key == destination_key:
             raise ValueError("source and destination must be different")
 
-        if self.isfile(source_key):
+        is_directory_bucket = self.bucket_name.endswith("--x-s3")
+        use_native = mode == "native" or (mode == "auto" and is_directory_bucket)
+        if use_native and (not is_directory_bucket or not self._supports_native_rename()):
+            raise NotImplementedError(
+                "native rename requires an AWS S3 Express directory bucket "
+                "and a recent boto3 client with RenameObject support"
+            )
+
+        if use_native:
+            try:
+                self._native_rename(source_key, destination_key)
+                return
+            except ClientError as exc:
+                code = exc.response.get("Error", {}).get("Code")
+                if code not in {"404", "NoSuchKey", "NotFound"}:
+                    raise
+        elif self.isfile(source_key):
             self.move(source_key, destination_key)
             return
 
@@ -451,7 +493,8 @@ class S3OS:
         if destination_prefix.startswith(source_prefix):
             raise ValueError("destination cannot be inside the source prefix")
 
-        self._enable_delete_objects_content_md5()
+        if not use_native:
+            self._enable_delete_objects_content_md5()
         found_source = False
         while True:
             response = self.client.list_objects_v2(
@@ -464,23 +507,32 @@ class S3OS:
                 break
 
             found_source = True
+            rename_pairs: list[tuple[str, str]] = []
             for object_key in source_keys:
                 relative_key = object_key[len(source_prefix) :]
                 target_key = f"{destination_prefix}{relative_key}"
-                self.copy(object_key, target_key)
+                if use_native:
+                    rename_pairs.append((object_key, target_key))
+                else:
+                    self.copy(object_key, target_key)
 
-            batch = [{"Key": key} for key in source_keys]
-            delete_response = self.client.delete_objects(
-                Bucket=self.bucket_name,
-                Delete={"Objects": batch, "Quiet": True},
-            )
-            errors = delete_response.get("Errors", [])
-            if errors:
-                details = "; ".join(
-                    f"{item.get('Key')}: {item.get('Code')} {item.get('Message', '')}"
-                    for item in errors
+            if use_native:
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    list(executor.map(self._native_rename_pair, rename_pairs))
+
+            if not use_native:
+                batch = [{"Key": key} for key in source_keys]
+                delete_response = self.client.delete_objects(
+                    Bucket=self.bucket_name,
+                    Delete={"Objects": batch, "Quiet": True},
                 )
-                raise RuntimeError(f"some source objects failed to delete: {details}")
+                errors = delete_response.get("Errors", [])
+                if errors:
+                    details = "; ".join(
+                        f"{item.get('Key')}: {item.get('Code')} {item.get('Message', '')}"
+                        for item in errors
+                    )
+                    raise RuntimeError(f"some source objects failed to delete: {details}")
 
         if not found_source:
             raise FileNotFoundError(
