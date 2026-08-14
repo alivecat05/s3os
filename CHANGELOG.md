@@ -10,6 +10,7 @@ Notable changes to this project are documented here. The format follows
 
 - Add `walk()` and path-aware `glob()` for recursive object discovery.
 - Add managed single-object `copy()` and copy-then-delete `move()` operations.
+- Add `rename()` as an explicit copy-then-delete object rename operation.
 
 ## [0.1.0] - 2026-08-13
 

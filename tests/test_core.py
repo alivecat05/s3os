@@ -303,8 +303,20 @@ def test_move_keeps_source_when_copy_fails():
     assert client.deleted == []
 
 
-@pytest.mark.parametrize("method_name", ["copy", "move"])
-def test_copy_and_move_reject_the_same_key(method_name):
+def test_rename_moves_an_object_to_a_new_key():
+    client = FakeClient()
+    client.objects["logs/current.log"] = b"log"
+    s3 = S3OS("bucket", client)
+
+    s3.rename("logs/current.log", "logs/archive/2026-08-14.log")
+
+    assert client.objects["logs/archive/2026-08-14.log"] == b"log"
+    assert "logs/current.log" not in client.objects
+    assert client.deleted == ["logs/current.log"]
+
+
+@pytest.mark.parametrize("method_name", ["copy", "move", "rename"])
+def test_copy_move_and_rename_reject_the_same_key(method_name):
     s3 = S3OS("bucket", FakeClient())
 
     with pytest.raises(ValueError, match="must be different"):

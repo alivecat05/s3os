@@ -427,6 +427,10 @@ class S3OS:
         self.copy(source_key, destination_key)
         self.remove(source_key)
 
+    def rename(self, source: object, destination: object) -> None:
+        """Rename one object within the bucket using copy-then-delete."""
+        self.move(source, destination)
+
     def rmtree(self, path: object) -> int:
         """Recursively delete all objects under ``path/`` and return the count."""
         key = self._key(path)

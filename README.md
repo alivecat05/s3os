@@ -7,8 +7,8 @@
 Small os-style helpers for working with S3 buckets.
 
 `s3os` wraps a boto3 S3 client with familiar file operations such as `listdir`,
-`isfile`, `isdir`, `walk`, `glob`, `open`, `copy`, `move`, `remove`, `rmtree`,
-`upload`, and `download`. It is
+`isfile`, `isdir`, `walk`, `glob`, `open`, `copy`, `move`, `rename`, `remove`,
+`rmtree`, `upload`, and `download`. It is
 useful when your code treats an S3 bucket like a lightweight project filesystem
 but you still want to keep direct control of the boto3 client and credentials.
 
@@ -135,17 +135,19 @@ deleted_count = s3.rmtree("folder")
 `remove()` deletes exactly one object. `rmtree()` deletes objects below the
 `folder/` prefix and refuses to delete the bucket root.
 
-### Copy and Move
+### Copy, Move, and Rename
 
 ```python
 s3.copy("models/latest.bin", "models/archive/v1.bin")
 s3.move("logs/current.jsonl", "logs/processed/current.jsonl")
+s3.rename("models/draft.bin", "models/final.bin")
 ```
 
-Both methods operate on one object within the bound bucket and overwrite an
+These methods operate on one object within the bound bucket and overwrite an
 existing destination, matching S3 behavior. `copy()` uses boto3's managed
-transfer, including multipart copy for large objects. `move()` deletes the
-source only after the copy succeeds; it is not an atomic S3 operation.
+transfer, including multipart copy for large objects. `move()` and `rename()`
+delete the source only after the copy succeeds. S3 has no atomic rename, so both
+operations are copy-then-delete rather than atomic filesystem operations.
 
 ### Permission Check
 
