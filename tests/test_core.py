@@ -42,6 +42,8 @@ class FakeClient:
         self.uploads = []
         self.copies = []
         self.copy_error = None
+        self.delete_batches = []
+        self.list_calls = []
         self.paginator = FakePaginator([])
         self.list_pages = []
 
@@ -49,10 +51,14 @@ class FakeClient:
         return {"Buckets": [{"Name": "alpha"}, {"Name": "beta"}]}
 
     def list_objects_v2(self, **kwargs):
+        self.list_calls.append(kwargs)
         if self.list_pages:
             return self.list_pages.pop(0)
         prefix = kwargs.get("Prefix", "")
         contents = [{"Key": key} for key in self.objects if key.startswith(prefix)]
+        max_keys = kwargs.get("MaxKeys")
+        if max_keys is not None:
+            contents = contents[:max_keys]
         return {"KeyCount": len(contents), "Contents": contents}
 
     def get_paginator(self, name):
@@ -80,6 +86,7 @@ class FakeClient:
         return {"ResponseMetadata": {"HTTPStatusCode": 204}}
 
     def delete_objects(self, Bucket, Delete):
+        self.delete_batches.append([item["Key"] for item in Delete["Objects"]])
         for item in Delete["Objects"]:
             self.deleted.append(item["Key"])
             self.objects.pop(item["Key"], None)
@@ -313,6 +320,81 @@ def test_rename_moves_an_object_to_a_new_key():
     assert client.objects["logs/archive/2026-08-14.log"] == b"log"
     assert "logs/current.log" not in client.objects
     assert client.deleted == ["logs/current.log"]
+
+
+def test_rename_moves_a_directory_prefix_after_copying_all_objects():
+    client = FakeClient()
+    client.objects = {
+        "datasets/raw/a.jsonl": b"a",
+        "datasets/raw/nested/b.jsonl": b"b",
+        "datasets/raw_backup/keep.jsonl": b"keep",
+    }
+    s3 = S3OS("bucket", client)
+
+    s3.rename("datasets/raw", "datasets/processed")
+
+    assert client.objects["datasets/processed/a.jsonl"] == b"a"
+    assert client.objects["datasets/processed/nested/b.jsonl"] == b"b"
+    assert client.objects["datasets/raw_backup/keep.jsonl"] == b"keep"
+    assert "datasets/raw/a.jsonl" not in client.objects
+    assert "datasets/raw/nested/b.jsonl" not in client.objects
+    assert client.list_calls[-1] == {
+        "Bucket": "bucket",
+        "Prefix": "datasets/raw/",
+        "MaxKeys": 1000,
+    }
+
+
+def test_directory_rename_processes_large_prefixes_in_bounded_batches():
+    client = FakeClient()
+    client.objects = {
+        f"source/item-{index:04}.txt": str(index).encode() for index in range(1001)
+    }
+    s3 = S3OS("bucket", client)
+
+    s3.rename("source", "destination")
+
+    assert [len(batch) for batch in client.delete_batches] == [1000, 1]
+    assert len(client.objects) == 1001
+    assert all(key.startswith("destination/") for key in client.objects)
+    assert all(call.get("MaxKeys") == 1000 for call in client.list_calls)
+
+
+def test_directory_rename_keeps_sources_when_a_copy_fails():
+    client = FakeClient()
+    client.objects = {
+        "source/a.txt": b"a",
+        "source/b.txt": b"b",
+    }
+    client.copy_error = ClientError(
+        {"Error": {"Code": "AccessDenied", "Message": "Denied"}},
+        "CopyObject",
+    )
+    s3 = S3OS("bucket", client)
+
+    with pytest.raises(ClientError):
+        s3.rename("source", "destination")
+
+    assert client.objects["source/a.txt"] == b"a"
+    assert client.objects["source/b.txt"] == b"b"
+    assert client.deleted == []
+
+
+def test_rename_rejects_a_destination_inside_the_source_prefix():
+    client = FakeClient()
+    client.paginator = FakePaginator([])
+    s3 = S3OS("bucket", client)
+
+    with pytest.raises(ValueError, match="inside the source prefix"):
+        s3.rename("datasets", "datasets/archive")
+
+
+def test_rename_reports_a_missing_source_clearly():
+    client = FakeClient()
+    s3 = S3OS("bucket", client)
+
+    with pytest.raises(FileNotFoundError, match="s3://bucket/missing"):
+        s3.rename("missing", "destination")
 
 
 @pytest.mark.parametrize("method_name", ["copy", "move", "rename"])

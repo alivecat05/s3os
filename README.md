@@ -141,13 +141,24 @@ deleted_count = s3.rmtree("folder")
 s3.copy("models/latest.bin", "models/archive/v1.bin")
 s3.move("logs/current.jsonl", "logs/processed/current.jsonl")
 s3.rename("models/draft.bin", "models/final.bin")
+s3.rename("datasets/raw", "datasets/processed")
 ```
 
-These methods operate on one object within the bound bucket and overwrite an
-existing destination, matching S3 behavior. `copy()` uses boto3's managed
-transfer, including multipart copy for large objects. `move()` and `rename()`
-delete the source only after the copy succeeds. S3 has no atomic rename, so both
-operations are copy-then-delete rather than atomic filesystem operations.
+`copy()` and `move()` operate on one object within the bound bucket. `rename()`
+accepts either one object or a directory-like prefix and preserves relative
+child keys when renaming a prefix. Existing destinations are overwritten,
+matching S3 behavior.
+
+`copy()` uses boto3's managed transfer, including multipart copy for large
+objects; object payloads are not downloaded to the local machine. `move()`
+deletes the source only after its copy succeeds.
+
+A directory `rename()` processes at most 1,000 keys at a time, so memory use
+does not grow with the total number of objects. Each batch is deleted only after
+every object in that batch has copied successfully. S3 has no atomic rename: if
+a later batch fails, earlier batches remain at the destination and unprocessed
+objects remain at the source. Calling `rename()` again resumes naturally from
+the remaining source objects.
 
 ### Permission Check
 

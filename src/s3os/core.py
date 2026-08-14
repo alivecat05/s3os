@@ -428,8 +428,64 @@ class S3OS:
         self.remove(source_key)
 
     def rename(self, source: object, destination: object) -> None:
-        """Rename one object within the bucket using copy-then-delete."""
-        self.move(source, destination)
+        """Rename one object or directory prefix using copy-then-delete.
+
+        Directory prefixes are processed in batches of up to 1,000 objects.
+        S3 has no atomic rename operation, so completed batches stay moved if a
+        later batch fails. Calling ``rename`` again continues with the objects
+        that remain under the source prefix.
+        """
+        source_key = self._key(source)
+        destination_key = self._key(destination)
+        if not source_key or not destination_key:
+            raise ValueError("source and destination must be object keys or prefixes")
+        if source_key == destination_key:
+            raise ValueError("source and destination must be different")
+
+        if self.isfile(source_key):
+            self.move(source_key, destination_key)
+            return
+
+        source_prefix = f"{source_key}/"
+        destination_prefix = f"{destination_key}/"
+        if destination_prefix.startswith(source_prefix):
+            raise ValueError("destination cannot be inside the source prefix")
+
+        self._enable_delete_objects_content_md5()
+        found_source = False
+        while True:
+            response = self.client.list_objects_v2(
+                Bucket=self.bucket_name,
+                Prefix=source_prefix,
+                MaxKeys=1000,
+            )
+            source_keys = [item["Key"] for item in response.get("Contents", [])]
+            if not source_keys:
+                break
+
+            found_source = True
+            for object_key in source_keys:
+                relative_key = object_key[len(source_prefix) :]
+                target_key = f"{destination_prefix}{relative_key}"
+                self.copy(object_key, target_key)
+
+            batch = [{"Key": key} for key in source_keys]
+            delete_response = self.client.delete_objects(
+                Bucket=self.bucket_name,
+                Delete={"Objects": batch, "Quiet": True},
+            )
+            errors = delete_response.get("Errors", [])
+            if errors:
+                details = "; ".join(
+                    f"{item.get('Key')}: {item.get('Code')} {item.get('Message', '')}"
+                    for item in errors
+                )
+                raise RuntimeError(f"some source objects failed to delete: {details}")
+
+        if not found_source:
+            raise FileNotFoundError(
+                f"no object or directory prefix found: s3://{self.bucket_name}/{source_key}"
+            )
 
     def rmtree(self, path: object) -> int:
         """Recursively delete all objects under ``path/`` and return the count."""
