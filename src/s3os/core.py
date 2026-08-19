@@ -217,6 +217,39 @@ class S3OS:
             or response.get("CommonPrefixes")
         )
 
+    def mkdir(
+        self,
+        path: object,
+        parents: bool = False,
+        exist_ok: bool = False,
+    ) -> None:
+        """Create an S3 directory marker.
+
+        S3 directories are key prefixes. This method creates a zero-byte
+        object whose key ends with ``/`` so empty directories can exist.
+        """
+        key = self._key(path)
+        if not key:
+            raise ValueError("cannot create the bucket root")
+
+        parts = key.split("/") if parents else [key]
+        prefixes = ["/".join(parts[:index]) for index in range(1, len(parts) + 1)]
+        if not parents:
+            parent = key.rpartition("/")[0]
+            if parent and not self.isdir(parent):
+                raise FileNotFoundError(f"parent directory does not exist: {parent}")
+
+        for prefix in prefixes:
+            if self.isdir(prefix):
+                if prefix == key and not exist_ok:
+                    raise FileExistsError(f"directory already exists: {key}")
+                continue
+            self.client.put_object(
+                Bucket=self.bucket_name,
+                Key=f"{prefix}/",
+                Body=b"",
+            )
+
     def exists(self, path: object) -> bool:
         return self.isfile(path) or self.isdir(path)
 

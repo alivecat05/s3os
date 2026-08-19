@@ -8,6 +8,7 @@ Notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Add `mkdir()` for creating S3 directory markers with parent support.
 - Add `walk()` and path-aware `glob()` for recursive object discovery.
 - Add managed single-object `copy()` and copy-then-delete `move()` operations.
 - Add `rename()` for copy-then-delete object and directory-prefix renames.

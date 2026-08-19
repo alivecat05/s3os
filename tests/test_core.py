@@ -255,6 +255,42 @@ def test_exists_distinguishes_files_and_prefixes():
     assert s3.exists("missing") is False
 
 
+def test_mkdir_creates_a_directory_marker():
+    client = FakeClient()
+    s3 = S3OS("bucket", client)
+
+    s3.mkdir("datasets")
+
+    assert client.objects["datasets/"] == b""
+    assert s3.isdir("datasets") is True
+
+
+def test_mkdir_can_create_missing_parents_and_is_idempotent():
+    client = FakeClient()
+    s3 = S3OS("bucket", client)
+
+    s3.mkdir("a/b/c", parents=True)
+    s3.mkdir("a/b/c", parents=True, exist_ok=True)
+
+    assert set(client.objects) == {"a/", "a/b/", "a/b/c/"}
+
+
+def test_mkdir_requires_existing_parent_by_default():
+    s3 = S3OS("bucket", FakeClient())
+
+    with pytest.raises(FileNotFoundError, match="parent directory"):
+        s3.mkdir("a/b")
+
+
+def test_mkdir_rejects_existing_directory_without_exist_ok():
+    client = FakeClient()
+    client.objects["data/"] = b""
+    s3 = S3OS("bucket", client)
+
+    with pytest.raises(FileExistsError, match="already exists"):
+        s3.mkdir("data")
+
+
 def test_isdir_supports_providers_that_omit_key_count():
     client = FakeClient()
     client.list_pages = [{"Contents": [{"Key": "data/file.txt"}]}]

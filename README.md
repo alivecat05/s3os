@@ -7,7 +7,7 @@
 Small os-style helpers for working with S3 buckets.
 
 `s3os` wraps a boto3 S3 client with familiar file operations such as `listdir`,
-`isfile`, `isdir`, `walk`, `glob`, `open`, `copy`, `move`, `rename`, `remove`,
+`isfile`, `isdir`, `mkdir`, `walk`, `glob`, `open`, `copy`, `move`, `rename`, `remove`,
 `rmtree`, `upload`, and `download`. It is
 useful when your code treats an S3 bucket like a lightweight project filesystem
 but you still want to keep direct control of the boto3 client and credentials.
@@ -90,9 +90,14 @@ s3.exists("folder/file.txt")
 s3.isfile("folder/file.txt")
 s3.isdir("folder")
 s3.listdir("folder")
+s3.mkdir("folder/new", parents=True, exist_ok=True)
 ```
 
 S3 keys always use `/`, even on Windows.
+
+`mkdir()` creates a zero-byte directory marker such as `folder/new/`. S3 does
+not have real directories; use `parents=True` to create missing parent markers
+and `exist_ok=True` to make the operation idempotent.
 
 ### Walk and Glob
 
