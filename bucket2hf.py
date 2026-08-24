@@ -83,8 +83,8 @@ CHECKPOINT_PATH = Path(__file__).with_name(".bucket2hf-uploaded.txt")
 if min(BATCH_SIZE, S3_DOWNLOAD_THREADS, HF_UPLOAD_THREADS) < 1:
     raise ValueError("Batch size and thread counts must all be at least 1.")
 
-AWS_ACCESS_KEY_ID = "019FE23D0767764488DD0D9DD2F91D1F"
-AWS_SECRET_ACCESS_KEY = "019FE23D07677632A2EF174667B94044"
+AWS_ACCESS_KEY_ID = ""
+AWS_SECRET_ACCESS_KEY = ""
 
 if not AWS_ACCESS_KEY_ID or not AWS_SECRET_ACCESS_KEY:
     raise RuntimeError(
@@ -92,9 +92,9 @@ if not AWS_ACCESS_KEY_ID or not AWS_SECRET_ACCESS_KEY:
         "before running this script."
     )
 
-REGION = "cn-sh-01b"
-ENDPOINT_URL = "https://aoss-internal.cn-sh-01b.sensecoreapi-oss.cn"
-S3_ENDPOINT_HOST = "aoss-internal.cn-sh-01b.sensecoreapi-oss.cn"
+REGION = ""
+ENDPOINT_URL = ""
+S3_ENDPOINT_HOST = ""
 
 
 def add_no_proxy(host):
